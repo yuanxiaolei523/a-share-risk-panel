@@ -3,3 +3,5 @@ node_modules/
 server.log
 server.err.log
 npm-debug.log*
+
+.vercel
