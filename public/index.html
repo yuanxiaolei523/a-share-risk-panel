@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>A 股买入检查面板</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app">
+      <nav class="top-tabs" aria-label="页面切换">
+        <button class="tab-button active" type="button" data-tab="steadyTab">稳健选股</button>
+        <button class="tab-button" type="button" data-tab="emotionTab">情绪周期</button>
+      </nav>
+
+      <section id="steadyTab" class="workspace tab-page active">
+        <aside class="panel controls" aria-label="输入条件">
+          <div class="brand">
+            <span class="brand-mark">A</span>
+            <div>
+              <h1>A 股买入检查面板</h1>
+              <p>先看风险，再谈机会。</p>
+            </div>
+          </div>
+
+          <form id="analysisForm" class="form">
+            <label>
+              <span>股票代码或名称</span>
+              <input id="code" name="code" placeholder="例如 600519 / 贵州茅台" value="平安银行" autocomplete="off">
+            </label>
+
+            <div class="grid-two">
+              <label>
+                <span>账户资金</span>
+                <input id="capital" name="capital" type="number" min="0" step="1000" value="100000">
+              </label>
+              <label>
+                <span>计划买入价</span>
+                <input id="entryPrice" name="entryPrice" type="number" min="0" step="0.01" placeholder="默认现价">
+              </label>
+            </div>
+
+            <div class="grid-two">
+              <label>
+                <span>单笔最大亏损 %</span>
+                <input id="riskPct" name="riskPct" type="number" min="0.1" max="5" step="0.1" value="1">
+              </label>
+              <label>
+                <span>单股仓位上限 %</span>
+                <input id="maxPositionPct" name="maxPositionPct" type="number" min="1" max="80" step="1" value="20">
+              </label>
+            </div>
+
+            <fieldset class="segmented">
+              <legend>交易节奏</legend>
+              <label>
+                <input type="radio" name="style" value="swing" checked>
+                <span>波段</span>
+              </label>
+              <label>
+                <input type="radio" name="style" value="short">
+                <span>短线</span>
+              </label>
+            </fieldset>
+
+            <button class="primary" type="submit">
+              <span>开始检查</span>
+              <span class="arrow">→</span>
+            </button>
+          </form>
+
+          <div class="note">
+            这是风控和复盘工具，不构成投资建议。仓位按你的风险预算反推；分数高也只代表“更适合继续研究”，不是保证上涨。
+          </div>
+        </aside>
+
+        <section class="results">
+          <div id="status" class="status">输入股票代码或名称后开始检查。</div>
+
+          <section id="summary" class="summary hidden" aria-label="综合结论">
+            <div>
+              <p class="eyebrow" id="stockName">--</p>
+              <h2 id="verdict">--</h2>
+              <p id="summaryText">--</p>
+            </div>
+            <div class="score-ring" aria-label="综合分数">
+              <strong id="score">--</strong>
+              <span>综合分</span>
+            </div>
+          </section>
+
+          <section id="metrics" class="metrics hidden" aria-label="关键指标"></section>
+
+          <section class="main-grid">
+            <article id="plan" class="panel hidden">
+              <div class="section-title">
+                <h3>仓位与止损</h3>
+                <span id="planHint">按风险预算计算</span>
+              </div>
+              <div class="trade-plan">
+                <div>
+                  <span>计划买入价</span>
+                  <strong id="entry">--</strong>
+                </div>
+                <div>
+                  <span>参考止损位</span>
+                  <strong id="stop">--</strong>
+                </div>
+                <div>
+                  <span>止损距离</span>
+                  <strong id="lossPct">--</strong>
+                </div>
+                <div>
+                  <span>建议股数</span>
+                  <strong id="shares">--</strong>
+                </div>
+                <div>
+                  <span>占用资金</span>
+                  <strong id="capitalUsed">--</strong>
+                </div>
+                <div>
+                  <span>触发止损亏损</span>
+                  <strong id="plannedRisk">--</strong>
+                </div>
+              </div>
+              <div id="stopLevels" class="levels"></div>
+            </article>
+
+            <article id="checklist" class="panel hidden">
+              <div class="section-title">
+                <h3>买入检查</h3>
+                <span>信号越一致越好</span>
+              </div>
+              <div id="checks" class="checks"></div>
+            </article>
+          </section>
+
+          <section id="riskBox" class="panel hidden">
+            <div class="section-title">
+              <h3>风险提醒</h3>
+              <span>先处理这些问题</span>
+            </div>
+            <ul id="risks" class="risk-list"></ul>
+          </section>
+        </section>
+      </section>
+
+      <section id="emotionTab" class="emotion-page tab-page hidden">
+        <section class="emotion-hero">
+          <div>
+            <p class="eyebrow">市场情绪周期</p>
+            <h2 id="emotionStage">--</h2>
+            <p id="emotionAction">先判断环境，再决定仓位。情绪差时少交易，情绪热时不追高。</p>
+          </div>
+          <div class="score-ring emotion-ring" aria-label="情绪分数">
+            <strong id="emotionScore">--</strong>
+            <span>情绪分</span>
+          </div>
+          <button id="refreshEmotion" class="secondary" type="button">刷新</button>
+        </section>
+
+        <section class="emotion-grid">
+          <article class="panel emotion-card">
+            <div class="section-title">
+              <h3>三大指数</h3>
+              <span id="emotionTime">--</span>
+            </div>
+            <div id="indexList" class="index-list"></div>
+          </article>
+
+          <article class="panel emotion-card">
+            <div class="section-title">
+              <h3>全市场温度</h3>
+              <span>看涨跌家数</span>
+            </div>
+            <div id="breadthGrid" class="breadth-grid"></div>
+          </article>
+        </section>
+
+        <section class="emotion-grid">
+          <article class="panel emotion-card">
+            <div class="section-title">
+              <h3>热门行业</h3>
+              <span>平均涨幅排序</span>
+            </div>
+            <div id="hotIndustries" class="industry-list"></div>
+          </article>
+
+          <article class="panel emotion-card">
+            <div class="section-title">
+              <h3>稳健观察池</h3>
+              <span>前面筛出的股票</span>
+            </div>
+            <div id="steadyList" class="watch-list"></div>
+          </article>
+        </section>
+
+        <section class="panel emotion-card">
+          <div class="section-title">
+            <h3>怎么用这个页面</h3>
+            <span>仓位规则</span>
+          </div>
+          <div class="cycle-rules">
+            <div><strong>冰点/退潮</strong><span>不急买，先看稳健股是否止跌，最多轻仓。</span></div>
+            <div><strong>震荡试错</strong><span>只做计划内交易，单只仓位控制在面板建议以内。</span></div>
+            <div><strong>升温</strong><span>可以分批试仓，但不要一次买满。</span></div>
+            <div><strong>高潮</strong><span>不追大涨股，已有仓位把止损上移。</span></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
