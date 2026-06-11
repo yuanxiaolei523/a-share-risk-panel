@@ -148,6 +148,78 @@ async function fetchJson(url, timeoutMs = 10000, retries = 2) {
   throw lastError;
 }
 
+async function fetchText(url, timeoutMs = 10000, retries = 2, encoding = "utf-8") {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          "accept": "text/plain,*/*",
+          "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+          "referer": "https://gu.qq.com/",
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AShareRiskPanel/1.0"
+        }
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const buffer = await response.arrayBuffer();
+      return new TextDecoder(encoding).decode(buffer);
+    } catch (error) {
+      lastError = error;
+      if (attempt < retries) await wait(350 * (attempt + 1));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError;
+}
+
+async function fetchTencentQuote(normalized) {
+  const prefix = normalized.code.startsWith("6") ? "sh" : "sz";
+  const text = await fetchText(`https://qt.gtimg.cn/q=${prefix}${normalized.code}`, 10000, 2, "gbk");
+  const match = text.match(/"(.*)"/);
+  if (!match) throw new Error("备用行情接口返回异常");
+  const parts = match[1].split("~");
+  const price = rawNumber(parts[3]);
+  if (!price) throw new Error("备用行情接口未返回有效价格");
+  return {
+    code: parts[2] || normalized.code,
+    name: parts[1] || normalized.resolvedName || normalized.code,
+    price,
+    open: rawNumber(parts[5]),
+    high: rawNumber(parts[33]) || rawNumber(parts[41]),
+    low: rawNumber(parts[34]) || rawNumber(parts[42]),
+    previousClose: rawNumber(parts[4]),
+    amount: rawNumber(parts[37]) ? rawNumber(parts[37]) * 10000 : null,
+    volume: rawNumber(parts[36]),
+    marketCap: rawNumber(parts[44]) ? rawNumber(parts[44]) * 100000000 : null,
+    floatMarketCap: rawNumber(parts[45]) ? rawNumber(parts[45]) * 100000000 : null,
+    pe: rawNumber(parts[52]),
+    pb: rawNumber(parts[46]),
+    turnover: rawNumber(parts[38]),
+    pctChange: rawNumber(parts[32]),
+    amplitude: rawNumber(parts[43]),
+    volumeRatio: rawNumber(parts[49])
+  };
+}
+
+function fallbackTrendStats(quote) {
+  const range = quote.high && quote.low ? quote.high - quote.low : quote.price * 0.025;
+  return {
+    ma5: null,
+    ma20: null,
+    ma60: null,
+    recentLow20: quote.low || Number((quote.price * 0.97).toFixed(2)),
+    recentHigh20: quote.high || Number((quote.price * 1.03).toFixed(2)),
+    atr14: Math.max(range, quote.price * 0.015),
+    volumeRatio: quote.volumeRatio,
+    distanceMa20: null,
+    latestDate: null
+  };
+}
+
 function parseKlines(rows = []) {
   return rows.map((line) => {
     const [date, open, close, high, low, volume, amount, amplitude, pct, change, turnover] = String(line).split(",");
@@ -490,46 +562,57 @@ export async function analyzeStock(params) {
   const klineUrl = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${normalized.secid}&ut=fa5fd1943c7b386f172d6893dbfba10b&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&end=20500101&lmt=120`;
   const financeUrl = `https://datacenter-web.eastmoney.com/api/data/v1/get?sortColumns=REPORT_DATE&sortTypes=-1&pageSize=1&pageNumber=1&reportName=RPT_F10_FINANCE_MAINFINADATA&columns=ALL&filter=(SECUCODE%3D%22${normalized.secucode}%22)`;
 
-  const [quoteBody, klineBody, financeBody] = await Promise.all([
+  const [quoteResult, klineResult, financeResult] = await Promise.allSettled([
     fetchJson(quoteUrl),
     fetchJson(klineUrl),
-    fetchJson(financeUrl).catch(() => null)
+    fetchJson(financeUrl)
   ]);
 
+  const dataWarnings = [];
+  let quoteBody = quoteResult.status === "fulfilled" ? quoteResult.value : null;
+  let quote;
   if (!quoteBody?.data?.f57) {
+    dataWarnings.push("主行情接口暂时不稳定，本次使用备用行情源。");
+    quote = await fetchTencentQuote(normalized);
+  }
+
+  if (!quoteBody?.data?.f57 && !quote?.code) {
     const err = new Error("没有找到这只股票，请确认代码是否为沪深 A 股。");
     err.status = 404;
     throw err;
   }
 
-  const decimals = rawNumber(quoteBody.data.f152) ?? 2;
-  const quote = {
-    code: quoteBody.data.f57,
-    name: quoteBody.data.f58,
-    price: scale(quoteBody.data.f43, decimals),
-    open: scale(quoteBody.data.f46, decimals),
-    high: scale(quoteBody.data.f44, decimals),
-    low: scale(quoteBody.data.f45, decimals),
-    previousClose: scale(quoteBody.data.f60, decimals),
-    amount: rawNumber(quoteBody.data.f48),
-    volume: rawNumber(quoteBody.data.f47),
-    marketCap: rawNumber(quoteBody.data.f116),
-    floatMarketCap: rawNumber(quoteBody.data.f117),
-    pe: scale(quoteBody.data.f162, 2),
-    pb: scale(quoteBody.data.f167, 2),
-    turnover: scale(quoteBody.data.f168, 2),
-    pctChange: scale(quoteBody.data.f170, 2),
-    amplitude: scale(quoteBody.data.f171, 2),
-    volumeRatio: rawNumber(quoteBody.data.f173)
-  };
-
-  const klines = parseKlines(klineBody?.data?.klines || []);
-  if (klines.length < 30) {
-    const err = new Error("日 K 数据不足，无法生成可靠止损和趋势判断。");
-    err.status = 502;
-    throw err;
+  if (!quote) {
+    const decimals = rawNumber(quoteBody.data.f152) ?? 2;
+    quote = {
+      code: quoteBody.data.f57,
+      name: quoteBody.data.f58,
+      price: scale(quoteBody.data.f43, decimals),
+      open: scale(quoteBody.data.f46, decimals),
+      high: scale(quoteBody.data.f44, decimals),
+      low: scale(quoteBody.data.f45, decimals),
+      previousClose: scale(quoteBody.data.f60, decimals),
+      amount: rawNumber(quoteBody.data.f48),
+      volume: rawNumber(quoteBody.data.f47),
+      marketCap: rawNumber(quoteBody.data.f116),
+      floatMarketCap: rawNumber(quoteBody.data.f117),
+      pe: scale(quoteBody.data.f162, 2),
+      pb: scale(quoteBody.data.f167, 2),
+      turnover: scale(quoteBody.data.f168, 2),
+      pctChange: scale(quoteBody.data.f170, 2),
+      amplitude: scale(quoteBody.data.f171, 2),
+      volumeRatio: rawNumber(quoteBody.data.f173)
+    };
   }
 
+  const klineBody = klineResult.status === "fulfilled" ? klineResult.value : null;
+  const klines = parseKlines(klineBody?.data?.klines || []);
+  if (klines.length < 30) {
+    dataWarnings.push("日 K 数据接口暂时不稳定，趋势与止损使用降级算法。");
+  }
+
+  const financeBody = financeResult.status === "fulfilled" ? financeResult.value : null;
+  if (!financeBody?.result?.data?.[0]) dataWarnings.push("财务接口暂时不稳定，本次财务评分可能偏保守。");
   const latestFinance = financeBody?.result?.data?.[0];
   const finance = latestFinance ? {
     reportName: latestFinance.REPORT_DATE_NAME,
@@ -545,13 +628,23 @@ export async function analyzeStock(params) {
     cashToRevenue: rawNumber(latestFinance.JYXJLYYSR)
   } : null;
 
-  const trend = trendStats(klines, quote.price);
+  const trend = klines.length >= 30 ? trendStats(klines, quote.price) : fallbackTrendStats(quote);
   const analysis = scoreAnalysis({ quote, finance, trend, input });
+  if (dataWarnings.length) {
+    analysis.warnings.unshift(...dataWarnings);
+    analysis.checklist.unshift(...dataWarnings.map((text) => ({
+      bucket: "risk",
+      points: 0,
+      text,
+      good: false
+    })));
+  }
   const plan = calcPlan({ quote, trend, analysis, input });
 
   return {
     updatedAt: new Date().toISOString(),
-    source: "东方财富公开接口",
+    source: dataWarnings.length ? "东方财富公开接口 / 备用行情源" : "东方财富公开接口",
+    dataWarnings,
     resolved: {
       query: normalized.query,
       code: normalized.code,
