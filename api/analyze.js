@@ -1,4 +1,4 @@
-import { analyzeStock } from "../server.js";
+import { analyzeStock, clientErrorMessage } from "../server.js";
 
 export default async function handler(req, res) {
   try {
@@ -8,7 +8,7 @@ export default async function handler(req, res) {
     res.status(200).json(data);
   } catch (error) {
     res.status(error.status || 500).json({
-      error: error.message || "分析失败，请稍后再试。"
+      error: clientErrorMessage(error, "分析失败，请稍后再试。")
     });
   }
 }

@@ -43,6 +43,28 @@ const KNOWN_STOCKS = [
   { code: "600690", name: "海尔智家" }
 ];
 
+const SNAPSHOT_QUOTES = {
+  "600900": {
+    name: "长江电力",
+    price: 27.89,
+    open: 27.69,
+    high: 27.95,
+    low: 27.6,
+    previousClose: 27.69,
+    amount: 2759360000,
+    volume: 991250,
+    marketCap: 682419000000,
+    floatMarketCap: 682419000000,
+    pe: 25.23,
+    pb: 2.99,
+    turnover: 0.41,
+    pctChange: 0.72,
+    amplitude: 1.26,
+    volumeRatio: 1.01,
+    snapshotAt: "2026-06-11 收盘参考"
+  }
+};
+
 function json(res, status, payload) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -85,7 +107,14 @@ async function resolveStockInput(input) {
   }
 
   const searchUrl = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(raw)}&type=14&token=D43BF722C8E33E4ADC6C5D7E3B11E2D2`;
-  const body = await fetchJson(searchUrl);
+  let body;
+  try {
+    body = await fetchJson(searchUrl);
+  } catch {
+    const err = new Error("股票名称搜索接口暂时不可用，请先输入 6 位股票代码。");
+    err.status = 503;
+    throw err;
+  }
   const candidates = body?.QuotationCodeTable?.Data || [];
   const aShares = candidates.filter((item) => item.Classify === "AStock" && /^\d\.\d{6}$/.test(item.QuoteID || ""));
   if (!aShares.length) return null;
@@ -148,7 +177,7 @@ async function fetchJson(url, timeoutMs = 10000, retries = 2) {
   throw lastError;
 }
 
-async function fetchText(url, timeoutMs = 10000, retries = 2, encoding = "utf-8") {
+async function fetchText(url, timeoutMs = 10000, retries = 2, encoding = "utf-8", referer = "https://gu.qq.com/") {
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     const controller = new AbortController();
@@ -159,7 +188,7 @@ async function fetchText(url, timeoutMs = 10000, retries = 2, encoding = "utf-8"
         headers: {
           "accept": "text/plain,*/*",
           "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-          "referer": "https://gu.qq.com/",
+          "referer": referer,
           "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AShareRiskPanel/1.0"
         }
       });
@@ -176,8 +205,18 @@ async function fetchText(url, timeoutMs = 10000, retries = 2, encoding = "utf-8"
   throw lastError;
 }
 
+function marketPrefix(code) {
+  if (code.startsWith("6")) return "sh";
+  if (code.startsWith("8") || code.startsWith("4")) return "bj";
+  return "sz";
+}
+
+function displayName(normalized) {
+  return normalized.resolvedName || KNOWN_STOCKS.find((item) => item.code === normalized.code)?.name || normalized.code;
+}
+
 async function fetchTencentQuote(normalized) {
-  const prefix = normalized.code.startsWith("6") ? "sh" : "sz";
+  const prefix = marketPrefix(normalized.code);
   const text = await fetchText(`https://qt.gtimg.cn/q=${prefix}${normalized.code}`, 10000, 2, "gbk");
   const match = text.match(/"(.*)"/);
   if (!match) throw new Error("备用行情接口返回异常");
@@ -202,6 +241,74 @@ async function fetchTencentQuote(normalized) {
     pctChange: rawNumber(parts[32]),
     amplitude: rawNumber(parts[43]),
     volumeRatio: rawNumber(parts[49])
+  };
+}
+
+async function fetchSinaQuote(normalized) {
+  const prefix = marketPrefix(normalized.code);
+  const text = await fetchText(
+    `https://hq.sinajs.cn/list=${prefix}${normalized.code}`,
+    10000,
+    2,
+    "gbk",
+    "https://finance.sina.com.cn/"
+  );
+  const match = text.match(/="([^"]*)"/);
+  if (!match || !match[1]) throw new Error("新浪备用行情接口返回异常");
+  const parts = match[1].split(",");
+  const price = rawNumber(parts[3]);
+  const previousClose = rawNumber(parts[2]);
+  const high = rawNumber(parts[4]);
+  const low = rawNumber(parts[5]);
+  if (!price) throw new Error("新浪备用行情接口未返回有效价格");
+  return {
+    code: normalized.code,
+    name: parts[0] || displayName(normalized),
+    price,
+    open: rawNumber(parts[1]),
+    high,
+    low,
+    previousClose,
+    amount: rawNumber(parts[9]),
+    volume: rawNumber(parts[8]) ? rawNumber(parts[8]) / 100 : null,
+    marketCap: null,
+    floatMarketCap: null,
+    pe: null,
+    pb: null,
+    turnover: null,
+    pctChange: previousClose ? Number((((price - previousClose) / previousClose) * 100).toFixed(2)) : null,
+    amplitude: previousClose && high && low ? Number((((high - low) / previousClose) * 100).toFixed(2)) : null,
+    volumeRatio: null
+  };
+}
+
+function buildReferenceQuote(normalized, input) {
+  const snapshot = SNAPSHOT_QUOTES[normalized.code];
+  const price = input.entryPrice || snapshot?.price;
+  if (!price) return null;
+  const previousClose = snapshot?.previousClose || price;
+  const high = snapshot?.high || price;
+  const low = snapshot?.low || price;
+  return {
+    code: normalized.code,
+    name: snapshot?.name || displayName(normalized),
+    price,
+    open: snapshot?.open || price,
+    high,
+    low,
+    previousClose,
+    amount: snapshot?.amount || null,
+    volume: snapshot?.volume || null,
+    marketCap: snapshot?.marketCap || null,
+    floatMarketCap: snapshot?.floatMarketCap || null,
+    pe: snapshot?.pe || null,
+    pb: snapshot?.pb || null,
+    turnover: snapshot?.turnover || null,
+    pctChange: snapshot?.pctChange ?? (previousClose ? Number((((price - previousClose) / previousClose) * 100).toFixed(2)) : null),
+    amplitude: snapshot?.amplitude ?? (previousClose ? Number((((high - low) / previousClose) * 100).toFixed(2)) : null),
+    volumeRatio: snapshot?.volumeRatio || null,
+    isReferenceOnly: true,
+    referenceNote: snapshot?.snapshotAt || "按用户输入买入价生成参考分析"
   };
 }
 
@@ -572,13 +679,26 @@ export async function analyzeStock(params) {
   let quoteBody = quoteResult.status === "fulfilled" ? quoteResult.value : null;
   let quote;
   if (!quoteBody?.data?.f57) {
-    dataWarnings.push("主行情接口暂时不稳定，本次使用备用行情源。");
-    quote = await fetchTencentQuote(normalized);
+    dataWarnings.push("主行情接口暂时不稳定，本次尝试备用行情源。");
+    try {
+      quote = await fetchTencentQuote(normalized);
+      dataWarnings.push("本次行情来自腾讯备用源，PE/PB 等估值口径可能与主源不同。");
+    } catch {
+      try {
+        quote = await fetchSinaQuote(normalized);
+        dataWarnings.push("本次行情来自新浪备用源，PE/PB 和换手率可能缺失。");
+      } catch {
+        quote = buildReferenceQuote(normalized, input);
+        if (quote) {
+          dataWarnings.push("实时行情源全部暂时不可用，本次使用参考价兜底，只能用于仓位和止损演示，不能直接下单。");
+        }
+      }
+    }
   }
 
   if (!quoteBody?.data?.f57 && !quote?.code) {
-    const err = new Error("没有找到这只股票，请确认代码是否为沪深 A 股。");
-    err.status = 404;
+    const err = new Error("实时行情源暂时不可用，系统还没有足够价格数据生成仓位和止损。请稍后重试，或先填写你的计划买入价。");
+    err.status = 503;
     throw err;
   }
 
@@ -603,6 +723,12 @@ export async function analyzeStock(params) {
       amplitude: scale(quoteBody.data.f171, 2),
       volumeRatio: rawNumber(quoteBody.data.f173)
     };
+  }
+
+  if (!quote.price) {
+    const err = new Error("行情源没有返回有效价格，暂时无法计算仓位和止损。请稍后重试，或先填写你的计划买入价。");
+    err.status = 503;
+    throw err;
   }
 
   const klineBody = klineResult.status === "fulfilled" ? klineResult.value : null;
@@ -679,6 +805,14 @@ async function serveStatic(req, res) {
   }
 }
 
+export function clientErrorMessage(error, fallback) {
+  const message = error?.message || "";
+  if (/fetch failed|aborted|ECONNRESET|ETIMEDOUT|ENOTFOUND|network|HTTP 5\d\d/i.test(message)) {
+    return "行情源暂时不稳定，请稍后重试；如果急着看仓位，可以填写 6 位股票代码和计划买入价。";
+  }
+  return message || fallback;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname === "/api/emotion") {
@@ -687,7 +821,7 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, data);
     } catch (error) {
       json(res, error.status || 500, {
-        error: error.message || "情绪周期分析失败，请稍后再试。"
+        error: clientErrorMessage(error, "情绪周期分析失败，请稍后再试。")
       });
     }
     return;
@@ -699,7 +833,7 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, data);
     } catch (error) {
       json(res, error.status || 500, {
-        error: error.message || "分析失败，请稍后再试。"
+        error: clientErrorMessage(error, "分析失败，请稍后再试。")
       });
     }
     return;
