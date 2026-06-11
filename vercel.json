@@ -10,6 +10,11 @@
       "use": "@vercel/static"
     }
   ],
+  "functions": {
+    "api/*.js": {
+      "maxDuration": 30
+    }
+  },
   "routes": [
     {
       "src": "/api/(.*)",
