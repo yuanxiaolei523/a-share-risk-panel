@@ -23,6 +23,26 @@ const STEADY_WATCHLIST = [
   { code: "601398", name: "工商银行", role: "防守金融", note: "大盘低波动品种，适合少折腾。" }
 ];
 
+const KNOWN_STOCKS = [
+  ...STEADY_WATCHLIST,
+  { code: "600519", name: "贵州茅台" },
+  { code: "000001", name: "平安银行" },
+  { code: "601899", name: "紫金矿业" },
+  { code: "601088", name: "中国神华" },
+  { code: "300750", name: "宁德时代" },
+  { code: "600276", name: "恒瑞医药" },
+  { code: "300760", name: "迈瑞医疗" },
+  { code: "601318", name: "中国平安" },
+  { code: "002594", name: "比亚迪" },
+  { code: "002475", name: "立讯精密" },
+  { code: "601138", name: "工业富联" },
+  { code: "300308", name: "中际旭创" },
+  { code: "600941", name: "中国移动" },
+  { code: "002415", name: "海康威视" },
+  { code: "601225", name: "陕西煤业" },
+  { code: "600690", name: "海尔智家" }
+];
+
 function json(res, status, payload) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -55,6 +75,15 @@ async function resolveStockInput(input) {
   if (normalized) return normalized;
 
   if (!raw) return null;
+  const known = KNOWN_STOCKS.find((item) => item.name === raw || item.name.includes(raw) || raw.includes(item.name));
+  if (known) {
+    return {
+      ...normalizeCode(known.code),
+      query: raw,
+      resolvedName: known.name
+    };
+  }
+
   const searchUrl = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(raw)}&type=14&token=D43BF722C8E33E4ADC6C5D7E3B11E2D2`;
   const body = await fetchJson(searchUrl);
   const candidates = body?.QuotationCodeTable?.Data || [];
@@ -86,25 +115,37 @@ function rawNumber(value) {
   return Number(value);
 }
 
-async function fetchJson(url, timeoutMs = 10000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        "accept": "application/json,text/plain,*/*",
-        "referer": "https://quote.eastmoney.com/",
-        "user-agent": "Mozilla/5.0 AShareRiskPanel/1.0"
-      }
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const text = await response.text();
-    const body = text.replace(/^[^(]*\(/, "").replace(/\);?$/, "");
-    return JSON.parse(body);
-  } finally {
-    clearTimeout(timer);
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchJson(url, timeoutMs = 10000, retries = 2) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          "accept": "application/json,text/plain,*/*",
+          "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+          "referer": "https://quote.eastmoney.com/",
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 AShareRiskPanel/1.0"
+        }
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const text = await response.text();
+      const body = text.replace(/^[^(]*\(/, "").replace(/\);?$/, "");
+      return JSON.parse(body);
+    } catch (error) {
+      lastError = error;
+      if (attempt < retries) await wait(350 * (attempt + 1));
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  throw lastError;
 }
 
 function parseKlines(rows = []) {

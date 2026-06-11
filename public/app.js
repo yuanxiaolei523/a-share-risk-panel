@@ -203,7 +203,7 @@ function renderEmotion(data) {
         <strong>${item.name} ${item.code}</strong>
         <span>${item.role} · ${item.note}</span>
       </div>
-      <button class="secondary use-stock" type="button" data-code="${item.name}">查看</button>
+      <button class="secondary use-stock" type="button" data-code="${item.code}">查看</button>
     </div>
   `).join("");
 
