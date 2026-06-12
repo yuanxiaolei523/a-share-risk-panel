@@ -4,9 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "email:opening": "node scripts/send-opening-email.js",
     "start": "node server.js"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "nodemailer": "^8.0.11"
   }
 }
