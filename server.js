@@ -539,6 +539,10 @@ function scoreAnalysis({ quote, finance, trend, input }) {
 
 function buildOperationGuide({ quote, trend, analysis, plan, input }) {
   const entry = plan.entry || quote.price;
+  const holdingCost = input.holdingCost;
+  const hasHolding = Number.isFinite(holdingCost) && holdingCost > 0;
+  const pnlPerShare = hasHolding ? Number((quote.price - holdingCost).toFixed(3)) : null;
+  const pnlPct = hasHolding ? Number((((quote.price - holdingCost) / holdingCost) * 100).toFixed(2)) : null;
   const atr = trend.atr14 || quote.price * 0.015;
   const ma20 = trend.ma20 || entry;
   const recentHigh = trend.recentHigh20 || quote.high || entry;
@@ -548,6 +552,7 @@ function buildOperationGuide({ quote, trend, analysis, plan, input }) {
   const takeProfit1 = Number((recentHigh + atr * 1.0).toFixed(2));
   const takeProfit2 = Number((recentHigh + atr * 2.4).toFixed(2));
   const reduceLine = Number(Math.max(plan.stop, ma20).toFixed(2));
+  const protectLine = hasHolding ? Number(Math.max(holdingCost, reduceLine - atr * 0.25).toFixed(3)) : reduceLine;
   const isExtended = trend.distanceMa20 !== null && trend.distanceMa20 > 3;
   const isStrong = quote.price >= ma20 && (!trend.ma60 || ma20 >= trend.ma60);
 
@@ -567,6 +572,21 @@ function buildOperationGuide({ quote, trend, analysis, plan, input }) {
     stance = "caution";
     summary = "趋势偏强，但短线已经离支撑较远，追涨的盈亏比一般。";
   }
+  if (hasHolding) {
+    if (pnlPct >= 1.5) {
+      headline = "已有浮盈，守利润";
+      stance = isExtended ? "caution" : "good";
+      summary = `你的成本 ${holdingCost}，当前每股浮盈约 ${pnlPerShare} 元，浮盈 ${pnlPct}%。重点从买入切换到保护利润。`;
+    } else if (pnlPct >= 0) {
+      headline = "接近成本，先守住";
+      stance = "watch";
+      summary = `你的成本 ${holdingCost}，当前小幅浮盈 ${pnlPct}%。先看能否站稳成本上方，不急加仓。`;
+    } else {
+      headline = "浮亏中，先控风险";
+      stance = "danger";
+      summary = `你的成本 ${holdingCost}，当前浮亏 ${Math.abs(pnlPct)}%。不要急着补仓，先等重新站回成本或关键均线。`;
+    }
+  }
 
   const maxShares = plan.suggestedShares;
   const firstBatch = Math.max(0, Math.floor((maxShares * 0.5) / 100) * 100);
@@ -577,9 +597,11 @@ function buildOperationGuide({ quote, trend, analysis, plan, input }) {
     headline,
     summary,
     zones: [
+      ...(hasHolding ? [{ label: "你的持仓成本", value: holdingCost.toFixed(3), tone: pnlPct >= 0 ? "good" : "danger" }] : []),
+      ...(hasHolding ? [{ label: "浮盈/浮亏", value: `${pnlPerShare}元 / ${pnlPct}%`, tone: pnlPct >= 0 ? "good" : "danger" }] : []),
       { label: "回踩观察区", value: `${pullbackLow}-${pullbackHigh}`, tone: "watch" },
       { label: "强势确认线", value: chaseLine, tone: "good" },
-      { label: "减仓警戒线", value: reduceLine, tone: "caution" },
+      { label: hasHolding ? "利润保护线" : "减仓警戒线", value: hasHolding ? protectLine.toFixed(3) : reduceLine, tone: "caution" },
       { label: "纪律止损线", value: plan.stop, tone: "danger" },
       { label: "第一止盈区", value: takeProfit1, tone: "good" },
       { label: "强势目标区", value: takeProfit2, tone: "watch" }
@@ -592,7 +614,9 @@ function buildOperationGuide({ quote, trend, analysis, plan, input }) {
       },
       {
         label: "已持仓",
-        text: `只要收盘不跌破 ${reduceLine}，先拿；若冲到 ${takeProfit1} 附近涨不动，可先落袋一部分。`,
+        text: hasHolding
+          ? `只要收盘不跌破 ${protectLine}，先拿；若冲到 ${takeProfit1} 附近涨不动，可先落袋一部分。`
+          : `只要收盘不跌破 ${reduceLine}，先拿；若冲到 ${takeProfit1} 附近涨不动，可先落袋一部分。`,
         tone: "good"
       },
       {
@@ -602,7 +626,9 @@ function buildOperationGuide({ quote, trend, analysis, plan, input }) {
       },
       {
         label: "必须认错",
-        text: `跌破 ${plan.stop} 不要补仓摊平，先退出复盘；这是为了防止小亏变大亏。`,
+        text: hasHolding
+          ? `跌破 ${protectLine} 不要补仓摊平，先退出复盘；盈利单不要拖成亏损单。`
+          : `跌破 ${plan.stop} 不要补仓摊平，先退出复盘；这是为了防止小亏变大亏。`,
         tone: "danger"
       }
     ],
@@ -837,6 +863,7 @@ export async function analyzeStock(params) {
     riskPct: Math.min(5, Math.max(0.1, Number(params.get("riskPct") || 1))),
     maxPositionPct: Math.min(80, Math.max(1, Number(params.get("maxPositionPct") || 20))),
     entryPrice: Number(params.get("entryPrice") || 0) || null,
+    holdingCost: Number(params.get("holdingCost") || 0) || null,
     style: params.get("style") === "short" ? "short" : "swing"
   };
 

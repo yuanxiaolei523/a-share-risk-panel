@@ -35,16 +35,23 @@
                 <input id="capital" name="capital" type="number" min="0" step="1000" value="100000">
               </label>
               <label>
-                <span>计划买入价</span>
-                <input id="entryPrice" name="entryPrice" type="number" min="0" step="0.01" placeholder="默认现价">
+                <span>持仓成本</span>
+                <input id="holdingCost" name="holdingCost" type="number" min="0" step="0.001" placeholder="没有持仓可不填" value="27.723">
               </label>
             </div>
 
             <div class="grid-two">
               <label>
+                <span>计划买入价</span>
+                <input id="entryPrice" name="entryPrice" type="number" min="0" step="0.01" placeholder="默认现价">
+              </label>
+              <label>
                 <span>单笔最大亏损 %</span>
                 <input id="riskPct" name="riskPct" type="number" min="0.1" max="5" step="0.1" value="1">
               </label>
+            </div>
+
+            <div class="grid-two">
               <label>
                 <span>单股仓位上限 %</span>
                 <input id="maxPositionPct" name="maxPositionPct" type="number" min="1" max="80" step="1" value="20">
