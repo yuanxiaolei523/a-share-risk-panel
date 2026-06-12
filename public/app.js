@@ -2,6 +2,7 @@ const form = document.querySelector("#analysisForm");
 const statusBox = document.querySelector("#status");
 const summary = document.querySelector("#summary");
 const metrics = document.querySelector("#metrics");
+const operationBox = document.querySelector("#operationBox");
 const plan = document.querySelector("#plan");
 const checklist = document.querySelector("#checklist");
 const riskBox = document.querySelector("#riskBox");
@@ -24,6 +25,11 @@ const num = new Intl.NumberFormat("zh-CN", {
 function fmt(value, suffix = "") {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
   return `${num.format(Number(value))}${suffix}`;
+}
+
+function displayValue(value, suffix = "") {
+  if (typeof value === "string") return value;
+  return fmt(value, suffix);
 }
 
 function money(value) {
@@ -55,7 +61,7 @@ function showError(text) {
 }
 
 function reveal() {
-  [summary, metrics, plan, checklist, riskBox].forEach((el) => el.classList.remove("hidden"));
+  [summary, metrics, operationBox, plan, checklist, riskBox].forEach((el) => el.classList.remove("hidden"));
 }
 
 function metric(label, value) {
@@ -113,6 +119,27 @@ function renderPlan(data) {
   }
 
   document.querySelector("#stopLevels").innerHTML = levels.join("");
+}
+
+function renderOperation(data) {
+  const operation = data.operation;
+  if (!operation) return;
+  operationBox.className = `panel operation-box ${operation.stance || "watch"}`;
+  setText("operationHeadline", operation.headline);
+  setText("operationSummary", operation.summary);
+  setText("operationNote", operation.note);
+  document.querySelector("#operationLevels").innerHTML = operation.zones.map((item) => `
+    <div class="operation-level ${item.tone}">
+      <span>${item.label}</span>
+      <strong>${displayValue(item.value)}</strong>
+    </div>
+  `).join("");
+  document.querySelector("#operationSteps").innerHTML = operation.steps.map((item) => `
+    <div class="operation-step ${item.tone}">
+      <strong>${item.label}</strong>
+      <span>${item.text}</span>
+    </div>
+  `).join("");
 }
 
 function renderChecklist(data) {
@@ -187,6 +214,18 @@ function renderEmotion(data) {
     </div>
   `).join("");
 
+  if (data.marketOutlook) {
+    setText("marketBias", data.marketOutlook.bias);
+    setText("marketSummary", data.marketOutlook.summary);
+    setText("marketNext", data.marketOutlook.next);
+    document.querySelector("#marketLevels").innerHTML = data.marketOutlook.levels.map((item) => `
+      <div class="market-level">
+        <span>${item.label}</span>
+        <strong>${item.value}</strong>
+      </div>
+    `).join("");
+  }
+
   document.querySelector("#hotIndustries").innerHTML = data.hotIndustries.map((item) => `
     <div class="industry-item">
       <div>
@@ -249,6 +288,7 @@ async function analyze() {
     if (!response.ok) throw new Error(data.error || "分析失败");
     renderSummary(data);
     renderMetrics(data);
+    renderOperation(data);
     renderPlan(data);
     renderChecklist(data);
     reveal();

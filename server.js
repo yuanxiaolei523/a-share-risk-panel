@@ -217,7 +217,7 @@ function displayName(normalized) {
 
 async function fetchTencentQuote(normalized) {
   const prefix = marketPrefix(normalized.code);
-  const text = await fetchText(`https://qt.gtimg.cn/q=${prefix}${normalized.code}`, 10000, 2, "gbk");
+  const text = await fetchText(`https://qt.gtimg.cn/q=${prefix}${normalized.code}`, 5000, 1, "gbk");
   const match = text.match(/"(.*)"/);
   if (!match) throw new Error("备用行情接口返回异常");
   const parts = match[1].split("~");
@@ -244,15 +244,21 @@ async function fetchTencentQuote(normalized) {
   };
 }
 
-async function fetchSinaQuote(normalized) {
-  const prefix = marketPrefix(normalized.code);
+async function fetchSinaRaw(symbols) {
+  const list = Array.isArray(symbols) ? symbols.join(",") : symbols;
   const text = await fetchText(
-    `https://hq.sinajs.cn/list=${prefix}${normalized.code}`,
-    10000,
-    2,
+    `https://hq.sinajs.cn/list=${list}`,
+    5000,
+    1,
     "gbk",
     "https://finance.sina.com.cn/"
   );
+  return text.split(/\r?\n/).filter(Boolean);
+}
+
+async function fetchSinaQuote(normalized) {
+  const prefix = marketPrefix(normalized.code);
+  const [text] = await fetchSinaRaw(`${prefix}${normalized.code}`);
   const match = text.match(/="([^"]*)"/);
   if (!match || !match[1]) throw new Error("新浪备用行情接口返回异常");
   const parts = match[1].split(",");
@@ -279,6 +285,27 @@ async function fetchSinaQuote(normalized) {
     pctChange: previousClose ? Number((((price - previousClose) / previousClose) * 100).toFixed(2)) : null,
     amplitude: previousClose && high && low ? Number((((high - low) / previousClose) * 100).toFixed(2)) : null,
     volumeRatio: null
+  };
+}
+
+async function fetchSinaIndexQuote(symbol, label) {
+  const [text] = await fetchSinaRaw(symbol);
+  const match = text?.match(/="([^"]*)"/);
+  if (!match || !match[1]) throw new Error("新浪指数接口返回异常");
+  const parts = match[1].split(",");
+  const price = rawNumber(parts[3]);
+  const previousClose = rawNumber(parts[2]);
+  const high = rawNumber(parts[4]);
+  const low = rawNumber(parts[5]);
+  const code = symbol.slice(2);
+  return {
+    label,
+    code,
+    name: parts[0] || label,
+    price,
+    pctChange: previousClose ? Number((((price - previousClose) / previousClose) * 100).toFixed(2)) : null,
+    amplitude: previousClose && high && low ? Number((((high - low) / previousClose) * 100).toFixed(2)) : null,
+    previousClose
   };
 }
 
@@ -310,6 +337,14 @@ function buildReferenceQuote(normalized, input) {
     isReferenceOnly: true,
     referenceNote: snapshot?.snapshotAt || "按用户输入买入价生成参考分析"
   };
+}
+
+function safeDecodePathname(pathname) {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
 }
 
 function fallbackTrendStats(quote) {
@@ -502,6 +537,79 @@ function scoreAnalysis({ quote, finance, trend, input }) {
   return { score: normalized, verdict, tone, multiplier, positives, warnings, checklist, parts };
 }
 
+function buildOperationGuide({ quote, trend, analysis, plan, input }) {
+  const entry = plan.entry || quote.price;
+  const atr = trend.atr14 || quote.price * 0.015;
+  const ma20 = trend.ma20 || entry;
+  const recentHigh = trend.recentHigh20 || quote.high || entry;
+  const pullbackLow = Number(Math.max(plan.stop, ma20 - atr * 0.25).toFixed(2));
+  const pullbackHigh = Number(Math.max(pullbackLow, ma20 + atr * 0.45).toFixed(2));
+  const chaseLine = Number((recentHigh + atr * 0.35).toFixed(2));
+  const takeProfit1 = Number((recentHigh + atr * 1.0).toFixed(2));
+  const takeProfit2 = Number((recentHigh + atr * 2.4).toFixed(2));
+  const reduceLine = Number(Math.max(plan.stop, ma20).toFixed(2));
+  const isExtended = trend.distanceMa20 !== null && trend.distanceMa20 > 3;
+  const isStrong = quote.price >= ma20 && (!trend.ma60 || ma20 >= trend.ma60);
+
+  let headline = "等回踩，不追高";
+  let stance = "watch";
+  let summary = "趋势仍可观察，但现价离短线支撑不算近，新仓更适合等回踩确认。";
+  if (analysis.tone === "danger") {
+    headline = "先观察，不开新仓";
+    stance = "danger";
+    summary = "综合信号偏弱，先等价格重新站稳关键均线，再考虑仓位。";
+  } else if (isStrong && !isExtended) {
+    headline = "可按计划小仓试";
+    stance = "good";
+    summary = "价格站在短中期趋势上方，若仓位轻，可以按面板仓位分批，不一次买满。";
+  } else if (isStrong && isExtended) {
+    headline = "强势但不追";
+    stance = "caution";
+    summary = "趋势偏强，但短线已经离支撑较远，追涨的盈亏比一般。";
+  }
+
+  const maxShares = plan.suggestedShares;
+  const firstBatch = Math.max(0, Math.floor((maxShares * 0.5) / 100) * 100);
+  const secondBatch = Math.max(0, maxShares - firstBatch);
+
+  return {
+    stance,
+    headline,
+    summary,
+    zones: [
+      { label: "回踩观察区", value: `${pullbackLow}-${pullbackHigh}`, tone: "watch" },
+      { label: "强势确认线", value: chaseLine, tone: "good" },
+      { label: "减仓警戒线", value: reduceLine, tone: "caution" },
+      { label: "纪律止损线", value: plan.stop, tone: "danger" },
+      { label: "第一止盈区", value: takeProfit1, tone: "good" },
+      { label: "强势目标区", value: takeProfit2, tone: "watch" }
+    ],
+    steps: [
+      {
+        label: "没持仓",
+        text: `不在大涨后追。等回踩 ${pullbackLow}-${pullbackHigh} 附近不破，再考虑第一笔 ${firstBatch || 100} 股以内。`,
+        tone: "watch"
+      },
+      {
+        label: "已持仓",
+        text: `只要收盘不跌破 ${reduceLine}，先拿；若冲到 ${takeProfit1} 附近涨不动，可先落袋一部分。`,
+        tone: "good"
+      },
+      {
+        label: "想加仓",
+        text: `只有放量站稳 ${chaseLine} 或回踩不破 20 日线时再加，第二笔不超过 ${secondBatch || 100} 股。`,
+        tone: "caution"
+      },
+      {
+        label: "必须认错",
+        text: `跌破 ${plan.stop} 不要补仓摊平，先退出复盘；这是为了防止小亏变大亏。`,
+        tone: "danger"
+      }
+    ],
+    note: input.style === "short" ? "短线模式下，止盈和止损都要更快执行。" : "波段模式下，重点看收盘价是否守住关键区间。"
+  };
+}
+
 function calcPlan({ quote, trend, analysis, input }) {
   const entry = input.entryPrice || quote.price;
   const levels = [];
@@ -551,7 +659,7 @@ function calcPlan({ quote, trend, analysis, input }) {
 
 async function fetchIndexQuote(secid, label) {
   const fields = "f43,f57,f58,f60,f170,f171,f152";
-  const body = await fetchJson(`https://push2.eastmoney.com/api/qt/stock/get?secid=${secid}&fields=${fields}`);
+  const body = await fetchJson(`https://push2.eastmoney.com/api/qt/stock/get?secid=${secid}&fields=${fields}`, 5000, 1);
   const data = body?.data || {};
   const decimals = rawNumber(data.f152) ?? 2;
   return {
@@ -565,6 +673,73 @@ async function fetchIndexQuote(secid, label) {
   };
 }
 
+async function fetchIndexQuoteSafe(secid, label, sinaSymbol) {
+  try {
+    return await fetchIndexQuote(secid, label);
+  } catch {
+    return fetchSinaIndexQuote(sinaSymbol, label);
+  }
+}
+
+async function fetchMarketRows() {
+  const base = "https://push2.eastmoney.com/api/qt/clist/get";
+  const fields = "f12,f14,f2,f3,f8,f9,f23,f20,f21,f62,f100";
+  const fs = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23";
+  const firstUrl = `${base}?pn=1&pz=100&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${fs}&fields=${fields}`;
+  const first = await fetchJson(firstUrl, 5000, 1);
+  const total = Math.min(rawNumber(first?.data?.total) || 0, 6000);
+  const pageCount = Math.max(1, Math.min(60, Math.ceil(total / 100)));
+  const urls = Array.from({ length: pageCount }, (_, index) => (
+    `${base}?pn=${index + 1}&pz=100&po=1&np=1&fltt=2&invt=2&fid=f3&fs=${fs}&fields=${fields}`
+  ));
+  const results = await Promise.allSettled(urls.map((url) => fetchJson(url, 5000, 1)));
+  const rows = results.flatMap((result) => (
+    result.status === "fulfilled" ? (result.value?.data?.diff || []) : []
+  ));
+  return rows.length ? rows : (first?.data?.diff || []);
+}
+
+async function fetchMarketRowsSafe() {
+  try {
+    return await fetchMarketRows();
+  } catch {
+    return [];
+  }
+}
+
+function buildMarketOutlook({ indices, breadth, score, label }) {
+  const sh = indices[0];
+  const support = sh?.price >= 4000 ? "4000 点" : "前低区域";
+  const pressure = sh?.price >= 4000 ? "4050-4060 点" : "4000 点";
+  const upRatio = breadth.upRatio ?? 0;
+  let bias = "震荡修复";
+  let summary = `涨跌家数偏均衡，先按 ${support} 上方震荡修复看。`;
+  if (score >= 78 || upRatio >= 68) {
+    bias = "反弹升温";
+    summary = `上涨家数占比约 ${fmtPercent(upRatio)}，三大指数同步收红，短线情绪明显回暖。`;
+  } else if (score <= 35 || upRatio <= 35) {
+    bias = "防守等待";
+    summary = `上涨家数占比约 ${fmtPercent(upRatio)}，市场承接不足，先降低交易频率。`;
+  }
+
+  return {
+    bias,
+    summary,
+    next: `后市先看上证能否守住 ${support}；若放量站稳 ${pressure}，反弹有机会延续，否则容易回到震荡。`,
+    strategy: label.action,
+    levels: [
+      { label: "上证防守线", value: support },
+      { label: "上方压力区", value: pressure },
+      { label: "交易节奏", value: score >= 78 ? "不追高，等回踩" : "轻仓试错" }
+    ]
+  };
+}
+
+function fmtPercent(value) {
+  if (!Number.isFinite(Number(value))) return "--";
+  return `${Number(value).toFixed(1)}%`;
+}
+
 function emotionLabel(score) {
   if (score >= 78) return { stage: "情绪高潮", tone: "danger", action: "不追高，先保护利润；新仓只看回踩，不做满仓。" };
   if (score >= 62) return { stage: "情绪升温", tone: "good", action: "可以小仓试错，但只买有计划、有止损的票。" };
@@ -574,14 +749,13 @@ function emotionLabel(score) {
 }
 
 export async function analyzeEmotionCycle() {
-  const [sh, sz, cy, marketBody] = await Promise.all([
-    fetchIndexQuote("1.000001", "上证指数"),
-    fetchIndexQuote("0.399001", "深证成指"),
-    fetchIndexQuote("0.399006", "创业板指"),
-    fetchJson("https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=6000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f14,f2,f3,f8,f9,f23,f20,f21,f62,f100")
+  const [sh, sz, cy, rows] = await Promise.all([
+    fetchIndexQuoteSafe("1.000001", "上证指数", "sh000001"),
+    fetchIndexQuoteSafe("0.399001", "深证成指", "sz399001"),
+    fetchIndexQuoteSafe("0.399006", "创业板指", "sz399006"),
+    fetchMarketRowsSafe()
   ]);
 
-  const rows = marketBody?.data?.diff || [];
   const valid = rows.filter((item) => Number.isFinite(Number(item.f3)) && Number.isFinite(Number(item.f2)));
   const up = valid.filter((item) => item.f3 > 0).length;
   const down = valid.filter((item) => item.f3 < 0).length;
@@ -625,24 +799,26 @@ export async function analyzeEmotionCycle() {
   score = Math.max(0, Math.min(100, Math.round(score)));
 
   const label = emotionLabel(score);
+  const breadthData = {
+    total: valid.length,
+    up,
+    down,
+    flat,
+    upRatio: Number((breadth * 100).toFixed(1)),
+    strongUp,
+    strongDown,
+    hotCount,
+    coldCount,
+    activeTurnover
+  };
   return {
     updatedAt: new Date().toISOString(),
     source: "东方财富公开接口",
     score,
     ...label,
     indices: [sh, sz, cy],
-    breadth: {
-      total: valid.length,
-      up,
-      down,
-      flat,
-      upRatio: Number((breadth * 100).toFixed(1)),
-      strongUp,
-      strongDown,
-      hotCount,
-      coldCount,
-      activeTurnover
-    },
+    breadth: breadthData,
+    marketOutlook: buildMarketOutlook({ indices: [sh, sz, cy], breadth: breadthData, score, label }),
     hotIndustries: industries,
     steadyWatchlist: STEADY_WATCHLIST
   };
@@ -670,9 +846,9 @@ export async function analyzeStock(params) {
   const financeUrl = `https://datacenter-web.eastmoney.com/api/data/v1/get?sortColumns=REPORT_DATE&sortTypes=-1&pageSize=1&pageNumber=1&reportName=RPT_F10_FINANCE_MAINFINADATA&columns=ALL&filter=(SECUCODE%3D%22${normalized.secucode}%22)`;
 
   const [quoteResult, klineResult, financeResult] = await Promise.allSettled([
-    fetchJson(quoteUrl),
-    fetchJson(klineUrl),
-    fetchJson(financeUrl)
+    fetchJson(quoteUrl, 5000, 1),
+    fetchJson(klineUrl, 5000, 1),
+    fetchJson(financeUrl, 5000, 1)
   ]);
 
   const dataWarnings = [];
@@ -766,6 +942,7 @@ export async function analyzeStock(params) {
     })));
   }
   const plan = calcPlan({ quote, trend, analysis, input });
+  const operation = buildOperationGuide({ quote, trend, analysis, plan, input });
 
   return {
     updatedAt: new Date().toISOString(),
@@ -781,13 +958,19 @@ export async function analyzeStock(params) {
     trend,
     analysis,
     plan,
+    operation,
     klines: last(klines, 80)
   };
 }
 
 async function serveStatic(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const pathname = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
+  const pathname = url.pathname === "/" ? "/index.html" : safeDecodePathname(url.pathname);
+  if (!pathname) {
+    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Bad request");
+    return;
+  }
   const fullPath = path.normalize(path.join(publicDir, pathname));
   if (!fullPath.startsWith(publicDir)) {
     res.writeHead(403);

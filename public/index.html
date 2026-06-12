@@ -26,7 +26,7 @@
           <form id="analysisForm" class="form">
             <label>
               <span>股票代码或名称</span>
-              <input id="code" name="code" placeholder="例如 600519 / 贵州茅台" value="平安银行" autocomplete="off">
+              <input id="code" name="code" placeholder="例如 600900 / 长江电力" value="长江电力" autocomplete="off">
             </label>
 
             <div class="grid-two">
@@ -90,6 +90,19 @@
           </section>
 
           <section id="metrics" class="metrics hidden" aria-label="关键指标"></section>
+
+          <section id="operationBox" class="panel operation-box hidden">
+            <div class="section-title">
+              <h3>操作分析</h3>
+              <span id="operationNote">按当前行情生成</span>
+            </div>
+            <div class="operation-head">
+              <strong id="operationHeadline">--</strong>
+              <span id="operationSummary">--</span>
+            </div>
+            <div id="operationLevels" class="operation-levels"></div>
+            <div id="operationSteps" class="operation-steps"></div>
+          </section>
 
           <section class="main-grid">
             <article id="plan" class="panel hidden">
@@ -175,6 +188,16 @@
             </div>
             <div id="breadthGrid" class="breadth-grid"></div>
           </article>
+        </section>
+
+        <section id="marketOutlook" class="panel emotion-card">
+          <div class="section-title">
+            <h3>今日大盘与后市</h3>
+            <span id="marketBias">--</span>
+          </div>
+          <p id="marketSummary" class="market-summary">--</p>
+          <div id="marketLevels" class="market-levels"></div>
+          <p id="marketNext" class="market-next">--</p>
         </section>
 
         <section class="emotion-grid">
