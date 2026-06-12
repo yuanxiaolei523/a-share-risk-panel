@@ -47,12 +47,36 @@ function paramsFor(code, overrides = {}) {
   return new URLSearchParams({
     code,
     capital: env("CAPITAL", "100000"),
-    holdingCost: env("HOLDING_COST", "27.723"),
+    holdingCost: "",
     riskPct: env("RISK_PCT", "1"),
     maxPositionPct: env("MAX_POSITION_PCT", "20"),
     style: "swing",
     ...overrides
   });
+}
+
+function parseHoldings() {
+  const configured = env("HOLDINGS");
+  if (configured) {
+    return configured
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => {
+        const [code, cost] = item.split(":").map((part) => part?.trim());
+        return { code, cost };
+      })
+      .filter((item) => item.code);
+  }
+
+  return [{
+    code: env("HOLDING_CODE", "600900"),
+    cost: env("HOLDING_COST", "27.723")
+  }];
+}
+
+function unique(items) {
+  return Array.from(new Set(items.filter(Boolean)));
 }
 
 async function safeAnalyze(code, overrides) {
@@ -104,16 +128,17 @@ function formatDate() {
 }
 
 async function buildReport() {
-  const holdingCode = env("HOLDING_CODE", "600900");
-  const watchCodes = env("WATCH_CODES", "600900,600036,000651,000333,601398")
+  const holdings = parseHoldings();
+  const holdingCodes = holdings.map((item) => item.code);
+  const watchCodes = unique(env("WATCH_CODES", "600900,600036,000651,000333,601398")
     .split(",")
     .map((code) => code.trim())
-    .filter(Boolean);
+    .filter(Boolean));
 
-  const [emotion, holding, ...watchResults] = await Promise.all([
+  const [emotion, holdingResults, watchResults] = await Promise.all([
     analyzeEmotionCycle().catch((error) => ({ error: error.message || "情绪读取失败" })),
-    safeAnalyze(holdingCode),
-    ...watchCodes.filter((code) => code !== holdingCode).map((code) => safeAnalyze(code, { holdingCost: "" }))
+    Promise.all(holdings.map((item) => safeAnalyze(item.code, { holdingCost: item.cost || "" }))),
+    Promise.all(watchCodes.filter((code) => !holdingCodes.includes(code)).map((code) => safeAnalyze(code)))
   ]);
 
   const subjectDate = new Intl.DateTimeFormat("zh-CN", {
@@ -140,7 +165,7 @@ async function buildReport() {
       : `- 后市观察：${emotion.marketOutlook?.next || "先看指数能否守住关键支撑。"}`,
     "",
     "【你的持仓】",
-    lineForStock(holding),
+    ...holdingResults.map(lineForStock),
     "",
     "【今日候选观察】",
     ...watchResults.map(lineForStock),
