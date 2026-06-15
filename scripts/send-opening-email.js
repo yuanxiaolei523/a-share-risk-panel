@@ -79,6 +79,82 @@ function unique(items) {
   return Array.from(new Set(items.filter(Boolean)));
 }
 
+async function fetchYahooQuote(symbol, label) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=5d&interval=1d`;
+  const response = await fetch(url, {
+    headers: {
+      "accept": "application/json",
+      "user-agent": "Mozilla/5.0 AShareRiskPanel/1.0"
+    }
+  });
+  if (!response.ok) throw new Error(`${label} HTTP ${response.status}`);
+  const body = await response.json();
+  const result = body?.chart?.result?.[0];
+  const meta = result?.meta || {};
+  const close = result?.indicators?.quote?.[0]?.close?.filter((value) => Number.isFinite(value)) || [];
+  const price = Number(meta.regularMarketPrice ?? close.at(-1));
+  const previous = Number(meta.previousClose ?? close.at(-2));
+  const pctChange = previous ? ((price - previous) / previous) * 100 : null;
+  return {
+    label,
+    symbol,
+    price,
+    pctChange: Number.isFinite(pctChange) ? Number(pctChange.toFixed(2)) : null
+  };
+}
+
+async function buildGlobalEnvironment() {
+  const targets = [
+    ["^GSPC", "标普500"],
+    ["^IXIC", "纳斯达克"],
+    ["CL=F", "WTI原油"],
+    ["GC=F", "COMEX黄金"],
+    ["USDCNH=X", "美元/离岸人民币"]
+  ];
+  const results = await Promise.allSettled(targets.map(([symbol, label]) => fetchYahooQuote(symbol, label)));
+  const quotes = results
+    .filter((result) => result.status === "fulfilled")
+    .map((result) => result.value);
+
+  if (!quotes.length) {
+    return {
+      summary: "外围市场读取失败，今天只按 A 股盘面信号执行。",
+      lines: ["- 外围市场读取失败，关注开盘后的指数承接和量能。"]
+    };
+  }
+
+  const lineItems = quotes.map((item) => (
+    `- ${item.label}：${fmt(item.price)}${item.pctChange === null ? "" : `（${fmt(item.pctChange, "%")}）`}`
+  ));
+  const oil = quotes.find((item) => item.symbol === "CL=F");
+  const gold = quotes.find((item) => item.symbol === "GC=F");
+  const nasdaq = quotes.find((item) => item.symbol === "^IXIC");
+  const cnh = quotes.find((item) => item.symbol === "USDCNH=X");
+  const notes = [];
+
+  if (oil?.pctChange !== null) {
+    if (oil.pctChange <= -1) notes.push("原油走弱，通常对应地缘风险缓和或需求预期降温，对风险偏好偏正面。");
+    else if (oil.pctChange >= 1) notes.push("原油走强，需防地缘风险或通胀预期扰动。");
+  }
+  if (gold?.pctChange !== null) {
+    if (gold.pctChange <= -1) notes.push("黄金回落，避险情绪降温。");
+    else if (gold.pctChange >= 1) notes.push("黄金走强，避险资金仍活跃。");
+  }
+  if (nasdaq?.pctChange !== null) {
+    if (nasdaq.pctChange >= 0.8) notes.push("纳指偏强，对 A 股科技成长方向有情绪支撑。");
+    else if (nasdaq.pctChange <= -0.8) notes.push("纳指偏弱，A 股高位科技股要降低追涨预期。");
+  }
+  if (cnh?.pctChange !== null) {
+    if (cnh.pctChange <= -0.2) notes.push("离岸人民币偏强，利于外资风险偏好。");
+    else if (cnh.pctChange >= 0.2) notes.push("离岸人民币偏弱，注意外资和指数承压。");
+  }
+
+  return {
+    summary: notes[0] || "外围市场没有明显单边信号，主要看 A 股自身量能和板块轮动。",
+    lines: [...lineItems, ...notes.slice(1).map((note) => `- ${note}`)]
+  };
+}
+
 async function safeAnalyze(code, overrides) {
   try {
     return await analyzeStock(paramsFor(code, overrides));
@@ -135,8 +211,12 @@ async function buildReport() {
     .map((code) => code.trim())
     .filter(Boolean));
 
-  const [emotion, holdingResults, watchResults] = await Promise.all([
+  const [emotion, globalEnvironment, holdingResults, watchResults] = await Promise.all([
     analyzeEmotionCycle().catch((error) => ({ error: error.message || "情绪读取失败" })),
+    buildGlobalEnvironment().catch((error) => ({
+      summary: `外围市场读取失败：${error.message || "未知错误"}`,
+      lines: ["- 外围市场读取失败，今天主要看 A 股盘面。"]
+    })),
     Promise.all(holdings.map((item) => safeAnalyze(item.code, { holdingCost: item.cost || "" }))),
     Promise.all(watchCodes.filter((code) => !holdingCodes.includes(code)).map((code) => safeAnalyze(code)))
   ]);
@@ -163,6 +243,10 @@ async function buildReport() {
     emotion.error
       ? ""
       : `- 后市观察：${emotion.marketOutlook?.next || "先看指数能否守住关键支撑。"}`,
+    "",
+    "【国际环境】",
+    `- ${globalEnvironment.summary}`,
+    ...globalEnvironment.lines,
     "",
     "【你的持仓】",
     ...holdingResults.map(lineForStock),
