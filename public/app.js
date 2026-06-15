@@ -10,7 +10,13 @@ const submitButton = form.querySelector("button");
 const tabButtons = document.querySelectorAll(".tab-button");
 const tabPages = document.querySelectorAll(".tab-page");
 const refreshEmotionButton = document.querySelector("#refreshEmotion");
+const fundForm = document.querySelector("#fundForm");
+const fundSubmitButton = document.querySelector("#fundSubmit");
+const fundStatus = document.querySelector("#fundStatus");
+const fundTotals = document.querySelector("#fundTotals");
+const fundList = document.querySelector("#fundList");
 let emotionLoaded = false;
+let fundsLoaded = false;
 
 const yuan = new Intl.NumberFormat("zh-CN", {
   style: "currency",
@@ -35,6 +41,12 @@ function displayValue(value, suffix = "") {
 function money(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
   return yuan.format(Number(value));
+}
+
+function signedMoney(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+  const prefix = Number(value) > 0 ? "+" : "";
+  return `${prefix}${money(value)}`;
 }
 
 function bigMoney(value) {
@@ -173,6 +185,9 @@ function switchTab(tabId) {
   if (tabId === "emotionTab" && !emotionLoaded) {
     loadEmotion();
   }
+  if (tabId === "fundTab" && !fundsLoaded) {
+    loadFunds();
+  }
 }
 
 function pctClass(value) {
@@ -301,9 +316,85 @@ async function analyze() {
   }
 }
 
+function renderFunds(data) {
+  fundTotals.classList.remove("hidden");
+  fundList.classList.remove("hidden");
+  fundTotals.innerHTML = [
+    metric("估算市值", money(data.totals.marketValue)),
+    metric("总浮盈亏", signedMoney(data.totals.totalPnl)),
+    metric("今日预计盈亏", signedMoney(data.totals.todayEstimatedPnl)),
+    metric("更新时间", new Date(data.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }))
+  ].join("");
+
+  fundList.innerHTML = data.funds.map((item) => {
+    if (item.error) {
+      return `
+        <article class="fund-card danger">
+          <div class="fund-card-head">
+            <div><strong>${item.code}</strong><span>读取失败</span></div>
+            <b>--</b>
+          </div>
+          <p>${item.error}</p>
+        </article>
+      `;
+    }
+    const tone = item.advice?.tone || "watch";
+    return `
+      <article class="fund-card ${tone}">
+        <div class="fund-card-head">
+          <div>
+            <strong>${item.name} ${item.code}</strong>
+            <span>${item.estimateTime || "--"} · ${item.latestNetValueDate || "--"} 净值 ${fmt(item.latestNetValue)}</span>
+          </div>
+          <b class="${pctClass(item.estimatePct)}">${fmt(item.estimatePct, "%")}</b>
+        </div>
+        <div class="fund-metrics">
+          <div><span>估算净值</span><strong>${fmt(item.estimateValue)}</strong></div>
+          <div><span>成本 / 份额</span><strong>${fmt(item.cost)} / ${fmt(item.shares)}</strong></div>
+          <div><span>估算市值</span><strong>${money(item.marketValue)}</strong></div>
+          <div><span>总浮盈亏</span><strong>${signedMoney(item.totalPnl)}</strong></div>
+          <div><span>总收益率</span><strong>${fmt(item.totalPnlPct, "%")}</strong></div>
+          <div><span>今日预计盈亏</span><strong>${signedMoney(item.todayEstimatedPnl)}</strong></div>
+        </div>
+        <div class="fund-advice">
+          <strong>${item.advice?.headline || "观察"}</strong>
+          <span>${item.advice?.text || data.warning}</span>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+async function loadFunds() {
+  fundSubmitButton.disabled = true;
+  fundStatus.className = "status";
+  fundStatus.textContent = "正在拉取基金估算净值...";
+  try {
+    const params = new URLSearchParams(new FormData(fundForm));
+    const response = await fetch(`/api/funds?${params.toString()}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "基金估算失败");
+    renderFunds(data);
+    fundsLoaded = true;
+    fundStatus.className = "status";
+    fundStatus.textContent = data.warning;
+  } catch (error) {
+    fundStatus.className = "status error";
+    fundStatus.textContent = error.message || "基金估算失败，请稍后再试。";
+  } finally {
+    fundSubmitButton.disabled = false;
+  }
+}
+
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   analyze();
+});
+
+fundForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  fundsLoaded = false;
+  loadFunds();
 });
 
 tabButtons.forEach((button) => {

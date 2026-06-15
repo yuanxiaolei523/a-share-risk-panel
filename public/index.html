@@ -11,6 +11,7 @@
       <nav class="top-tabs" aria-label="页面切换">
         <button class="tab-button active" type="button" data-tab="steadyTab">稳健选股</button>
         <button class="tab-button" type="button" data-tab="emotionTab">情绪周期</button>
+        <button class="tab-button" type="button" data-tab="fundTab">基金估算</button>
       </nav>
 
       <section id="steadyTab" class="workspace tab-page active">
@@ -236,6 +237,35 @@
             <div><strong>升温</strong><span>可以分批试仓，但不要一次买满。</span></div>
             <div><strong>高潮</strong><span>不追大涨股，已有仓位把止损上移。</span></div>
           </div>
+        </section>
+      </section>
+
+      <section id="fundTab" class="fund-page tab-page hidden">
+        <section class="panel fund-tool">
+          <div class="section-title">
+            <h3>场外基金估算</h3>
+            <span>盘中估算，晚上净值校准</span>
+          </div>
+          <form id="fundForm" class="fund-form">
+            <label>
+              <span>基金持仓</span>
+              <textarea id="fundItems" name="items" rows="5" spellcheck="false">161725:1.1200:5000
+003096:1.4500:3000</textarea>
+            </label>
+            <button id="fundSubmit" class="primary" type="submit">
+              <span>刷新估算</span>
+              <span class="arrow">→</span>
+            </button>
+          </form>
+          <div class="note">
+            每行格式：基金代码:成本净值:份额。成本和份额可不填，只输入基金代码也能查看估算涨幅。估算净值不是最终收益，晚间正式净值更新后再做确认。
+          </div>
+        </section>
+
+        <section class="fund-results">
+          <div id="fundStatus" class="status">输入基金代码后刷新估算。</div>
+          <section id="fundTotals" class="metrics hidden" aria-label="基金汇总"></section>
+          <section id="fundList" class="fund-list hidden" aria-label="基金列表"></section>
         </section>
       </section>
     </main>

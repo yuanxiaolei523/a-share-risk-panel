@@ -27,7 +27,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -155,7 +156,8 @@ legend {
   font-weight: 700;
 }
 
-input {
+input,
+textarea {
   width: 100%;
   min-height: 42px;
   border: 1px solid var(--line);
@@ -166,7 +168,14 @@ input {
   outline: none;
 }
 
-input:focus {
+textarea {
+  min-height: 130px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+input:focus,
+textarea:focus {
   border-color: var(--brand);
   box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
 }
@@ -567,6 +576,114 @@ input:focus {
   margin: 0 auto;
 }
 
+.fund-page {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  gap: 18px;
+  max-width: 1320px;
+  margin: 0 auto;
+}
+
+.fund-tool,
+.fund-results {
+  align-self: start;
+}
+
+.fund-tool {
+  position: sticky;
+  top: 24px;
+  padding: 18px;
+}
+
+.fund-form {
+  display: grid;
+  gap: 14px;
+}
+
+.fund-results {
+  display: grid;
+  gap: 16px;
+}
+
+.fund-list {
+  display: grid;
+  gap: 12px;
+}
+
+.fund-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--blue);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.fund-card.good {
+  border-left-color: var(--green);
+}
+
+.fund-card.caution {
+  border-left-color: var(--amber);
+}
+
+.fund-card.danger {
+  border-left-color: var(--red);
+}
+
+.fund-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.fund-card-head div {
+  display: grid;
+  gap: 5px;
+}
+
+.fund-card-head span,
+.fund-metrics span,
+.fund-advice span {
+  color: var(--muted);
+}
+
+.fund-card-head b {
+  font-size: 22px;
+  white-space: nowrap;
+}
+
+.fund-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fund-metrics div {
+  min-height: 74px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f9fbfc;
+}
+
+.fund-metrics strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 17px;
+}
+
+.fund-advice {
+  display: grid;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  line-height: 1.55;
+}
+
 .emotion-hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 116px auto;
@@ -719,16 +836,19 @@ input:focus {
 
 @media (max-width: 1080px) {
   .workspace,
+  .fund-page,
   .main-grid,
   .emotion-grid {
     grid-template-columns: 1fr;
   }
 
-  .controls {
+  .controls,
+  .fund-tool {
     position: static;
   }
 
-  .metrics {
+  .metrics,
+  .fund-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
@@ -745,7 +865,8 @@ input:focus {
 
   .grid-two,
   .metrics,
-  .trade-plan {
+  .trade-plan,
+  .fund-metrics {
     grid-template-columns: 1fr;
   }
 

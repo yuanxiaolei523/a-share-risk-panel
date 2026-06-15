@@ -144,6 +144,11 @@ function rawNumber(value) {
   return Number(value);
 }
 
+function fundCode(input) {
+  const match = String(input || "").trim().match(/(\d{6})/);
+  return match ? match[1] : null;
+}
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -203,6 +208,29 @@ async function fetchText(url, timeoutMs = 10000, retries = 2, encoding = "utf-8"
     }
   }
   throw lastError;
+}
+
+async function fetchFundEstimate(code) {
+  const text = await fetchText(
+    `https://fundgz.1234567.com.cn/js/${code}.js?rt=${Date.now()}`,
+    5000,
+    1,
+    "utf-8",
+    "https://fund.eastmoney.com/"
+  );
+  const match = text.match(/jsonpgz\((.*)\);?/);
+  if (!match) throw new Error("基金估算接口返回异常");
+  const data = JSON.parse(match[1]);
+  if (!data?.fundcode) throw new Error("没有找到这只基金，请确认基金代码。");
+  return {
+    code: data.fundcode,
+    name: data.name || code,
+    latestNetValue: rawNumber(data.dwjz),
+    latestNetValueDate: data.jzrq || null,
+    estimateValue: rawNumber(data.gsz),
+    estimatePct: rawNumber(data.gszzl),
+    estimateTime: data.gztime || null
+  };
 }
 
 function marketPrefix(code) {
@@ -850,6 +878,133 @@ export async function analyzeEmotionCycle() {
   };
 }
 
+function parseFundItems(rawItems, params) {
+  const items = String(rawItems || "")
+    .split(/[\n,;]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const [code, cost, shares] = item.split(":").map((part) => part?.trim());
+      return {
+        code: fundCode(code),
+        cost: rawNumber(cost),
+        shares: rawNumber(shares)
+      };
+    })
+    .filter((item) => item.code);
+
+  if (items.length) return items;
+  const code = fundCode(params.get("code"));
+  if (!code) return [];
+  return [{
+    code,
+    cost: rawNumber(params.get("cost")),
+    shares: rawNumber(params.get("shares"))
+  }];
+}
+
+function fundAdvice(row) {
+  if (row.error) return { tone: "danger", headline: "读取失败", text: row.error };
+  const hasHolding = Number.isFinite(row.cost) && Number.isFinite(row.shares) && row.shares > 0;
+  if (!hasHolding) {
+    return {
+      tone: "watch",
+      headline: "仅观察估算",
+      text: "未填写成本和份额，本次只展示估算涨幅，不计算持仓盈亏。"
+    };
+  }
+  if (row.totalPnlPct >= 10) {
+    return {
+      tone: "good",
+      headline: "已有较多浮盈",
+      text: "可以继续持有，但要考虑分批止盈规则，避免估算回撤吞掉利润。"
+    };
+  }
+  if (row.totalPnlPct >= 3) {
+    return {
+      tone: "good",
+      headline: "浮盈中",
+      text: "持有观察，若对应板块连续冲高，避免继续追买。"
+    };
+  }
+  if (row.totalPnlPct <= -8) {
+    return {
+      tone: "danger",
+      headline: "亏损偏大",
+      text: "先控制仓位，不建议盲目补仓；等净值企稳或分批规则触发再处理。"
+    };
+  }
+  if (row.estimatePct < -1.5) {
+    return {
+      tone: "caution",
+      headline: "今日估算偏弱",
+      text: "先等晚上正式净值确认，短线不要因为盘中估算波动频繁操作。"
+    };
+  }
+  return {
+    tone: "watch",
+    headline: "接近成本区",
+    text: "以观察为主；场外基金更适合按周/月复盘，不按分钟级波动交易。"
+  };
+}
+
+export async function analyzeFunds(params) {
+  const items = parseFundItems(params.get("items"), params);
+  if (!items.length) {
+    const err = new Error("请输入基金代码，或按“代码:成本:份额”格式输入多只基金。");
+    err.status = 400;
+    throw err;
+  }
+
+  const results = await Promise.all(items.slice(0, 20).map(async (item) => {
+    try {
+      const quote = await fetchFundEstimate(item.code);
+      const estimateValue = quote.estimateValue ?? quote.latestNetValue;
+      const hasHolding = Number.isFinite(item.cost) && Number.isFinite(item.shares) && item.shares > 0 && Number.isFinite(estimateValue);
+      const marketValue = hasHolding ? estimateValue * item.shares : null;
+      const costValue = hasHolding ? item.cost * item.shares : null;
+      const totalPnl = hasHolding ? marketValue - costValue : null;
+      const totalPnlPct = hasHolding && costValue ? (totalPnl / costValue) * 100 : null;
+      const todayEstimatedPnl = hasHolding && Number.isFinite(quote.latestNetValue)
+        ? (estimateValue - quote.latestNetValue) * item.shares
+        : null;
+      const row = {
+        ...quote,
+        cost: item.cost,
+        shares: item.shares,
+        marketValue: marketValue === null ? null : Number(marketValue.toFixed(2)),
+        totalPnl: totalPnl === null ? null : Number(totalPnl.toFixed(2)),
+        totalPnlPct: totalPnlPct === null ? null : Number(totalPnlPct.toFixed(2)),
+        todayEstimatedPnl: todayEstimatedPnl === null ? null : Number(todayEstimatedPnl.toFixed(2)),
+        isEstimated: true
+      };
+      return {
+        ...row,
+        advice: fundAdvice(row)
+      };
+    } catch (error) {
+      const row = { code: item.code, cost: item.cost, shares: item.shares, error: error.message || "基金估算失败" };
+      return { ...row, advice: fundAdvice(row) };
+    }
+  }));
+
+  const totalMarketValue = results.reduce((sum, item) => sum + (Number(item.marketValue) || 0), 0);
+  const totalPnl = results.reduce((sum, item) => sum + (Number(item.totalPnl) || 0), 0);
+  const todayEstimatedPnl = results.reduce((sum, item) => sum + (Number(item.todayEstimatedPnl) || 0), 0);
+
+  return {
+    updatedAt: new Date().toISOString(),
+    source: "东方财富基金估算接口",
+    warning: "场外基金盘中为估算净值，不是最终收益；晚上正式净值更新后才是准确涨跌幅。",
+    totals: {
+      marketValue: Number(totalMarketValue.toFixed(2)),
+      totalPnl: Number(totalPnl.toFixed(2)),
+      todayEstimatedPnl: Number(todayEstimatedPnl.toFixed(2))
+    },
+    funds: results
+  };
+}
+
 export async function analyzeStock(params) {
   const normalized = await resolveStockInput(params.get("code"));
   if (!normalized) {
@@ -1044,6 +1199,18 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       json(res, error.status || 500, {
         error: clientErrorMessage(error, "分析失败，请稍后再试。")
+      });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/funds") {
+    try {
+      const data = await analyzeFunds(url.searchParams);
+      json(res, 200, data);
+    } catch (error) {
+      json(res, error.status || 500, {
+        error: clientErrorMessage(error, "基金估算失败，请稍后再试。")
       });
     }
     return;
