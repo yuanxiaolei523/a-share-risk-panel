@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "email:cost-alert": "node scripts/send-cost-alert-email.js",
     "email:opening": "node scripts/send-opening-email.js",
     "start": "node server.js"
   },

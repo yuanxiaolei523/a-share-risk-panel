@@ -5,6 +5,7 @@ node_modules/
 !.env.example
 server.log
 server.err.log
+.cost-alert-state.json
 npm-debug.log*
 
 .vercel
